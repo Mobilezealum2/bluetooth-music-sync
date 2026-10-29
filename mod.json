@@ -6,9 +6,9 @@
   },
   "id": "yourname.music-sync",
   "name": "Music Sync",
-  "version": "v1.1.0",
+  "version": "v1.2.0",
   "developer": "yourname",
-  "description": "Синхронизирует музыку с игрой при лагах, режим задержки для Bluetooth",
+  "description": "Синхронизация музыки при лагах, сглаживание кадров, режим Bluetooth",
   "settings": {
     "threshold": {
       "type": "int",
@@ -16,6 +16,11 @@
       "default": 40,
       "min": 15,
       "max": 300
+    },
+    "smooth_dt": {
+      "type": "bool",
+      "name": "Сглаживание кадров",
+      "default": true
     },
     "bt_enabled": {
       "type": "bool",
