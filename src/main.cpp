@@ -1,74 +1,62 @@
 #include <Geode/Geode.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
-#include <cmath>
 #include <string>
 #include <algorithm>
 
 using namespace geode::prelude;
 
-// ---------- Компенсация задержки Bluetooth ----------
+// ---------- Один сдвиг музыки вперёд ----------
 class $modify(BtPlayLayer, PlayLayer) {
     struct Fields {
-        bool calibrated = false;
-        int frames = 0;
-        double offsetMs = 0;   // музыка - игровое время (без сдвига)
-        double shiftMs = 0;    // какой сдвиг сейчас применён к музыке
-        float cooldown = 0.f;
+        bool pending = true;     // нужно ли применить сдвиг
+        int frames = 0;          // кадров после старта попытки
+        int appliedMs = 0;       // какой сдвиг сейчас применён
     };
 
     void resetLevel() {
         PlayLayer::resetLevel();
-        m_fields->calibrated = false;
+        // музыка запускается заново, прежний сдвиг пропал
+        m_fields->appliedMs = 0;
         m_fields->frames = 0;
-        m_fields->shiftMs = 0;
+        m_fields->pending = true;
+    }
+
+    void resume() {
+        PlayLayer::resume();
+        // применим разницу, если задержку поменяли в паузе
+        m_fields->frames = 0;
+        m_fields->pending = true;
     }
 
     void postUpdate(float dt) {
         PlayLayer::postUpdate(dt);
 
+        auto f = m_fields.self();
+        if (!f->pending) return; // после сдвига мод больше ничего не делает
+
         if (m_isPaused || m_hasCompletedLevel || m_player1->m_isDead) return;
 
-        auto f = m_fields.self();
-        bool enabled = Mod::get()->getSettingValue<bool>("bt_enabled");
-
-        // режим выключен и сдвига нет: мод ничего не делает
-        if (!enabled && f->shiftMs == 0) return;
+        // ждём немного, пока музыка реально запустится
+        if (++f->frames < 15) return;
 
         auto audio = FMODAudioEngine::sharedEngine();
         if (!audio->isMusicPlaying(0)) return;
 
-        f->cooldown -= dt;
+        f->pending = false;
 
-        // ждём ~1 сек после старта, пока музыка нормально запустится
-        if (!f->calibrated) {
-            if (++f->frames < 60) return;
-            f->offsetMs = (double)audio->getMusicTimeMS(0)
-                        - m_gameState.m_levelTime * 1000.0
-                        - f->shiftMs;
-            f->calibrated = true;
-            return;
+        int target = 0;
+        if (Mod::get()->getSettingValue<bool>("bt_enabled")) {
+            target = (int)Mod::get()->getSettingValue<int64_t>("bt_delay");
         }
 
-        int btMs = enabled ? (int)Mod::get()->getSettingValue<int64_t>("bt_delay") : 0;
+        int delta = target - f->appliedMs;
+        if (delta == 0) return;
 
-        double expected = m_gameState.m_levelTime * 1000.0 + f->offsetMs + btMs;
-        double actual = (double)audio->getMusicTimeMS(0);
-        double drift = actual - expected; // >0 музыка убежала вперёд
-
-        // огромный дрейф = сменилась песня/триггер, калибруем заново
-        if (std::abs(drift) > 2000.0) {
-            f->calibrated = false;
-            f->frames = 0;
-            f->shiftMs = 0;
-            return;
-        }
-
-        if (std::abs(drift) > 40.0 && f->cooldown <= 0.f && expected > 0) {
-            audio->setMusicTimeMS((unsigned int)expected, false, 0);
-            f->shiftMs = btMs;
-            f->cooldown = 0.25f;
-        }
+        int now = (int)audio->getMusicTimeMS(0);
+        int pos = std::max(0, now + delta);
+        audio->setMusicTimeMS((unsigned int)pos, false, 0);
+        f->appliedMs = target;
     }
 };
 
