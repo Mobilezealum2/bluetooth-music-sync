@@ -4,24 +4,12 @@
     "win": "2.2081",
     "android": "2.2081"
   },
-  "id": "yourname.music-sync",
-  "name": "Music Sync",
-  "version": "v1.2.0",
-  "developer": "yourname",
-  "description": "Синхронизация музыки при лагах, сглаживание кадров, режим Bluetooth",
+  "id": "bluetooth.music-sync",
+  "name": "Bluetooth Sync",
+  "version": "v1.3.0",
+  "developer": "Zealum2",
+  "description": "Компенсация задержки Bluetooth-наушников для музыки",
   "settings": {
-    "threshold": {
-      "type": "int",
-      "name": "Порог рассинхрона (мс)",
-      "default": 40,
-      "min": 15,
-      "max": 300
-    },
-    "smooth_dt": {
-      "type": "bool",
-      "name": "Сглаживание кадров",
-      "default": true
-    },
     "bt_enabled": {
       "type": "bool",
       "name": "Режим Bluetooth",
