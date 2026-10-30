@@ -1,44 +1,19 @@
 #include <Geode/Geode.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
-#include <Geode/modify/CCScheduler.hpp>
 #include <cmath>
 #include <string>
 #include <algorithm>
 
 using namespace geode::prelude;
 
-// ---------- Сглаживание времени кадра ----------
-class $modify(SmoothScheduler, CCScheduler) {
-    void update(float dt) {
-        if (!Mod::get()->getSettingValue<bool>("smooth_dt")) {
-            return CCScheduler::update(dt);
-        }
-        static float err = 0.f;
-        float target = (float)CCDirector::sharedDirector()->getAnimationInterval();
-        float use = dt;
-
-        if (target > 0.f && std::abs(dt - target) < target * 0.3f) {
-            // обычный кадр с дрожанием: подаём ровное время
-            err += dt - target;
-            use = target;
-            if (std::abs(err) > target * 0.5f) {
-                use += err; // возвращаем накопленную разницу
-                err = 0.f;
-            }
-        } else {
-            err = 0.f; // реальный фриз не трогаем
-        }
-        CCScheduler::update(use);
-    }
-};
-
-// ---------- Синхронизация музыки ----------
-class $modify(SyncPlayLayer, PlayLayer) {
+// ---------- Компенсация задержки Bluetooth ----------
+class $modify(BtPlayLayer, PlayLayer) {
     struct Fields {
         bool calibrated = false;
         int frames = 0;
-        double offsetMs = 0;
+        double offsetMs = 0;   // музыка - игровое время (без сдвига)
+        double shiftMs = 0;    // какой сдвиг сейчас применён к музыке
         float cooldown = 0.f;
     };
 
@@ -46,12 +21,7 @@ class $modify(SyncPlayLayer, PlayLayer) {
         PlayLayer::resetLevel();
         m_fields->calibrated = false;
         m_fields->frames = 0;
-    }
-
-    void resume() {
-        PlayLayer::resume();
-        m_fields->calibrated = false;
-        m_fields->frames = 0;
+        m_fields->shiftMs = 0;
     }
 
     void postUpdate(float dt) {
@@ -59,24 +29,28 @@ class $modify(SyncPlayLayer, PlayLayer) {
 
         if (m_isPaused || m_hasCompletedLevel || m_player1->m_isDead) return;
 
+        auto f = m_fields.self();
+        bool enabled = Mod::get()->getSettingValue<bool>("bt_enabled");
+
+        // режим выключен и сдвига нет: мод ничего не делает
+        if (!enabled && f->shiftMs == 0) return;
+
         auto audio = FMODAudioEngine::sharedEngine();
         if (!audio->isMusicPlaying(0)) return;
 
-        auto f = m_fields.self();
         f->cooldown -= dt;
 
         // ждём ~1 сек после старта, пока музыка нормально запустится
         if (!f->calibrated) {
             if (++f->frames < 60) return;
-            f->offsetMs = (double)audio->getMusicTimeMS(0) - m_gameState.m_levelTime * 1000.0;
+            f->offsetMs = (double)audio->getMusicTimeMS(0)
+                        - m_gameState.m_levelTime * 1000.0
+                        - f->shiftMs;
             f->calibrated = true;
             return;
         }
 
-        int btMs = 0;
-        if (Mod::get()->getSettingValue<bool>("bt_enabled")) {
-            btMs = (int)Mod::get()->getSettingValue<int64_t>("bt_delay");
-        }
+        int btMs = enabled ? (int)Mod::get()->getSettingValue<int64_t>("bt_delay") : 0;
 
         double expected = m_gameState.m_levelTime * 1000.0 + f->offsetMs + btMs;
         double actual = (double)audio->getMusicTimeMS(0);
@@ -86,19 +60,20 @@ class $modify(SyncPlayLayer, PlayLayer) {
         if (std::abs(drift) > 2000.0) {
             f->calibrated = false;
             f->frames = 0;
+            f->shiftMs = 0;
             return;
         }
 
-        int threshold = (int)Mod::get()->getSettingValue<int64_t>("threshold");
-        if (std::abs(drift) > threshold && f->cooldown <= 0.f && expected > 0) {
+        if (std::abs(drift) > 40.0 && f->cooldown <= 0.f && expected > 0) {
             audio->setMusicTimeMS((unsigned int)expected, false, 0);
+            f->shiftMs = btMs;
             f->cooldown = 0.25f;
         }
     }
 };
 
 // ---------- Кнопки в меню паузы ----------
-class $modify(SyncPauseLayer, PauseLayer) {
+class $modify(BtPauseLayer, PauseLayer) {
     void customSetup() {
         PauseLayer::customSetup();
 
@@ -114,7 +89,7 @@ class $modify(SyncPauseLayer, PauseLayer) {
         menu->addChild(title);
 
         auto toggler = CCMenuItemToggler::createWithStandardSprites(
-            this, menu_selector(SyncPauseLayer::onBtToggle), 0.8f
+            this, menu_selector(BtPauseLayer::onBtToggle), 0.8f
         );
         toggler->toggle(on);
         toggler->setPosition({0.f, 35.f});
@@ -123,7 +98,7 @@ class $modify(SyncPauseLayer, PauseLayer) {
         auto minusSpr = ButtonSprite::create("-");
         minusSpr->setScale(0.7f);
         auto minusBtn = CCMenuItemSpriteExtra::create(
-            minusSpr, this, menu_selector(SyncPauseLayer::onBtMinus)
+            minusSpr, this, menu_selector(BtPauseLayer::onBtMinus)
         );
         minusBtn->setPosition({-32.f, 2.f});
         menu->addChild(minusBtn);
@@ -131,7 +106,7 @@ class $modify(SyncPauseLayer, PauseLayer) {
         auto plusSpr = ButtonSprite::create("+");
         plusSpr->setScale(0.7f);
         auto plusBtn = CCMenuItemSpriteExtra::create(
-            plusSpr, this, menu_selector(SyncPauseLayer::onBtPlus)
+            plusSpr, this, menu_selector(BtPauseLayer::onBtPlus)
         );
         plusBtn->setPosition({32.f, 2.f});
         menu->addChild(plusBtn);
